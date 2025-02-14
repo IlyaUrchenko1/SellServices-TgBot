@@ -7,7 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from utils.database import Database
 from urllib.parse import quote
 import json
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union
 from handlers.main_function.post_handler import to_home_keyboard
 
 
@@ -19,7 +19,7 @@ class EditServiceStates(StatesGroup):
     waiting_for_photo = State()
     confirm_delete = State()
 
-def create_webapp_form_for_edit(service: dict) -> Optional[ReplyKeyboardMarkup]:
+def create_webapp_form_for_edit(service: Dict[str, Any]) -> Optional[ReplyKeyboardMarkup]:
     """Создает форму веб-приложения для редактирования услуги"""
     try:
         service_type = db.get_service_type(service["service_type_id"])

@@ -34,11 +34,26 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_by_id TEXT,
                 is_active BOOLEAN DEFAULT 1,
-                required_fields TEXT NOT NULL DEFAULT '{
-                    "photo": {"type": "image", "label": "Фотография услуги", "required": true, "description": "Загрузите фото, отражающее вашу услугу"},
-                    "number_phone": {"type": "text", "label": "Номер телефона", "required": false, "description": "Укажите номер телефона для связи"},
-                    "price": {"type": "number", "label": "Стоимость", "required": true, "description": "Укажите стоимость услуги в рублях"}
-                }'
+                price_level INTEGER DEFAULT 0,
+                required_fields TEXT,
+                CONSTRAINT valid_required_fields CHECK (
+                    required_fields IS NULL OR json_valid(required_fields)
+                )
+            )
+        """)
+        
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS service_type_fields (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_type_id INTEGER NOT NULL,
+                field_name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                field_type TEXT NOT NULL CHECK (field_type IN ('text', 'number', 'select', 'multiselect')),
+                options TEXT,
+                is_required BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (service_type_id) REFERENCES service_types(id),
+                UNIQUE(service_type_id, field_name)
             )
         """)
 
@@ -118,9 +133,8 @@ class Database:
                 INSERT INTO users (telegram_id, username, number_phone, is_seller, full_name,
                                  work_time_start, work_time_end, work_days)
                 VALUES (?, ?, ?, ?, ?, '10:00', '22:00', '1,2,3,4,5,6,7')
-                RETURNING id
             """, (telegram_id, username, number_phone, int(is_seller), full_name))
-            user_id = self.cursor.fetchone()[0]
+            user_id = self.cursor.lastrowid
             self.connection.commit()
             return user_id
         except sqlite3.IntegrityError:
@@ -249,7 +263,7 @@ class Database:
 
     def add_service_type(self, name: str, created_by_id: str, required_fields: Dict[str, Dict[str, Any]]) -> Optional[int]:
         """
-        Добавляет новый тип услуги с указаниями полями
+        Добавляет новый тип услуги
         Args:
             name: Название типа услуги
             created_by_id: Telegram ID админа, создавшего тип
@@ -258,26 +272,13 @@ class Database:
             ID созданного типа услуги или None в случае ошибки
         """
         try:
-            # Добавляем стандартные поля, если их нет
-            default_fields = {
-                "photo": {"type": "image", "label": "Фотография услуги", "required": True, "description": "Загрузите фото услуги"},
-                "number_phone": {"type": "text", "label": "Номер телефона", "required": False, "description": "Укажите номер телефона для связи"},
-                "price": {"type": "number", "label": "Стоимость", "required": True, "description": "Укажите стоимость в рублях"},
-            }
-            
-            # Объединяем дефолтные поля с пользовательскими
-            all_fields = {**default_fields, **required_fields}
-            
             self.cursor.execute("""
-                INSERT INTO service_types (name, created_by_id, required_fields)
-                VALUES (?, ?, ?)
-                RETURNING id
-            """, (name, created_by_id, json.dumps(all_fields, ensure_ascii=False)))
-            
-            result = self.cursor.fetchone()
+                INSERT INTO service_types (name, created_by_id)
+                VALUES (?, ?)
+            """, (name, created_by_id))
             self.connection.commit()
-            return result[0] if result else None
-            
+            return self.cursor.lastrowid
+
         except sqlite3.IntegrityError:
             print(f"Тип услуги '{name}' уже существует")
             return None
@@ -289,11 +290,11 @@ class Database:
         """
         Получает информацию о типе услуги по ID
         Returns:
-            Словарь с информацией о типе услуги и его полях
+            Словарь с информацией о типе услуги
         """
         try:
             self.cursor.execute("""
-                SELECT id, name, created_by_id, required_fields, is_active
+                SELECT id, name, created_by_id, created_at, is_active, price_level
                 FROM service_types 
                 WHERE id = ?
             """, (type_id,))
@@ -306,8 +307,9 @@ class Database:
                 "id": row[0],
                 "name": row[1],
                 "created_by_id": row[2],
-                "required_fields": json.loads(row[3]),
-                "is_active": bool(row[4])
+                "created_at": row[3],
+                "is_active": bool(row[4]),
+                "price_level": row[5]
             }
         except Exception as e:
             print(f"Ошибка при получении типа услуги: {e}")
@@ -321,7 +323,7 @@ class Database:
         """
         try:
             self.cursor.execute("""
-                SELECT id, name, required_fields 
+                SELECT id, name, created_at, price_level
                 FROM service_types
                 WHERE is_active = 1
                 ORDER BY name
@@ -332,7 +334,8 @@ class Database:
                 types.append({
                     "id": row[0],
                     "name": row[1],
-                    "required_fields": json.loads(row[2])
+                    "created_at": row[2],
+                    "price_level": row[3]
                 })
             return types
             
@@ -378,6 +381,35 @@ class Database:
             print(f"Ошибка при обновлении просмотров: {e}")
             return False
 
+    def get_service_types_by_creation_date(self) -> List[Dict]:
+        """
+        Получает все типы услуг, отсортированные по времени создания (чем старее, тем выше)
+        Returns:
+            Список словарей с информацией о типах услуг
+        """
+        try:
+            self.cursor.execute("""
+                SELECT id, name, created_at, created_by_id, is_active, price_level
+                FROM service_types
+                ORDER BY created_at ASC
+            """)
+            
+            types = []
+            for row in self.cursor.fetchall():
+                types.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "created_at": row[2],
+                    "created_by_id": row[3],
+                    "is_active": bool(row[4]),
+                    "price_level": row[5]
+                })
+            return types
+            
+        except Exception as e:
+            print(f"Ошибка при получении типов услуг: {e}")
+            return []
+
     #endregion
 
     #region Методы для таблицы services
@@ -409,16 +441,14 @@ class Database:
                     district, street, house, number_phone, price, custom_fields
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                RETURNING id
             """, (
                 user_id, service_type_id, title, photo_id, city,
                 district, street, house, number_phone, price,
                 json.dumps(custom_fields, ensure_ascii=False)
             ))
 
-            result = self.cursor.fetchone()
             self.connection.commit()
-            return result[0] if result else None
+            return self.cursor.lastrowid  # Используем lastrowid для получения ID
 
         except Exception as e:
             print(f"Ошибка при создании услуги: {e}")
@@ -775,14 +805,7 @@ class Database:
             return (min_price or 0, max_price or 0)
         except Exception as e:
             print(f"Ошибка при получении диапазона цен: {e}")
-            return (0, 0)
-
-    def get_service_by_id(self, service_id: int) -> Optional[Dict]:
-        """
-        Получает информацию об услуге по его ID
-        """
-        self.cursor.execute("SELECT * FROM services WHERE id = ?", (service_id,))
-        return self.cursor.fetchone()   
+            return (0, 0)  
 
     def update_service_status(self, service_id: int, status: str) -> None:
         """
@@ -833,10 +856,6 @@ class Database:
                 self.cursor.execute("SELECT id FROM services WHERE id = ?", (accused_service_id,))
                 if not self.cursor.fetchone():
                     raise ValueError("Услуга не найдена")
-
-            # # Проверяем, не подает ли пользователь жалобу на самого себя
-            # if creator_telegram_id == accused_telegram_id:
-            #     raise ValueError("Нельзя подать жалобу на самого себя")
 
             self.cursor.execute("""
                 INSERT INTO complaints (

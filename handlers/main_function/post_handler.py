@@ -44,7 +44,7 @@ def create_pagination_keyboard(total_items: int, current_page: int) -> InlineKey
 
 def build_service_types_keyboard(page: int = 1) -> Optional[InlineKeyboardMarkup]:
     """Создает клавиатуру типов услуг с пагинацией"""
-    service_types = db.get_active_service_types()
+    service_types = db.get_service_types_by_creation_date()
     if not service_types:
         return None
         

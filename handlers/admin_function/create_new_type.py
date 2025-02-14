@@ -7,6 +7,7 @@ from utils.database import Database
 from utils.variables import ADMIN_IDS
 import math
 from keyboards.role_keyboards import admin_keyboard
+from typing import List, Dict, Any, Optional
 
 router = Router(name='admin')
 db = Database()
@@ -24,14 +25,14 @@ class CreateServiceType(StatesGroup):
     waiting_for_select_options = State()
     waiting_for_more_fields = State()
 
-def get_pagination_keyboard(total_items, current_page):
+def get_pagination_keyboard(total_items: int, current_page: int):
     total_pages = math.ceil(total_items / ITEMS_PER_PAGE)
     keyboard = InlineKeyboardBuilder()
     
     start_idx = (current_page - 1) * ITEMS_PER_PAGE
     end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
     
-    nav_buttons = []
+    nav_buttons: List[InlineKeyboardButton] = []
     if current_page > 1:
         nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"page_{current_page-1}"))
     if current_page < total_pages:
@@ -43,7 +44,7 @@ def get_pagination_keyboard(total_items, current_page):
     keyboard.row(InlineKeyboardButton(text=f"📄 {current_page}/{total_pages}", callback_data="current_page"))
     return keyboard.as_markup()
 
-def get_back_admin_keyboard(back_callback: str = None):
+def get_back_admin_keyboard(back_callback: Optional[str] = None):
     keyboard = InlineKeyboardBuilder()
     if back_callback:
         keyboard.row(InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback))
@@ -81,7 +82,12 @@ async def start_create_service_type(callback: CallbackQuery, state: FSMContext):
         "current_page": 1
     })
     
-    keyboard = get_back_admin_keyboard()
+    keyboard = InlineKeyboardBuilder()
+    keyboard.row(
+        InlineKeyboardButton(text="✅ Использовать базовые поля", callback_data="use_default_fields"),
+        InlineKeyboardButton(text="➕ Добавить свои поля", callback_data="add_custom_fields")
+    )
+    keyboard.row(InlineKeyboardButton(text="🏠 В админ меню", callback_data="admin_menu"))
     
     await callback.message.edit_text(
         "📝 Добро пожаловать в создание нового типа услуги!\n\n"
@@ -92,7 +98,7 @@ async def start_create_service_type(callback: CallbackQuery, state: FSMContext):
         "- Мастер маникюра\n"
         "- Фотограф на мероприятия\n\n"
         "❗️ Важно: Название должно быть понятным и точно описывать тип услуги",
-        reply_markup=keyboard
+        reply_markup=keyboard.as_markup()
     )
 
 @router.message(CreateServiceType.waiting_for_name)
@@ -103,7 +109,56 @@ async def process_name(message: Message, state: FSMContext):
         return
         
     await state.update_data(name=name)
-    await add_new_field(message, state)
+    
+    keyboard = InlineKeyboardBuilder()
+    keyboard.row(
+        InlineKeyboardButton(text="✅ Использовать базовые поля", callback_data="use_default_fields"),
+        InlineKeyboardButton(text="➕ Добавить свои поля", callback_data="add_custom_fields")
+    )
+    keyboard.row(InlineKeyboardButton(text="🏠 В админ меню", callback_data="admin_menu"))
+    
+    await message.answer(
+        "Выберите вариант настройки полей:\n\n"
+        "✅ Использовать базовые поля - будут использованы только стандартные поля (фото, телефон, цена)\n"
+        "➕ Добавить свои поля - возможность настроить дополнительные поля для этого типа услуги",
+        reply_markup=keyboard.as_markup()
+    )
+
+@router.callback_query(F.data == "use_default_fields")
+async def use_default_fields(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    try:
+        type_id = db.add_service_type(
+            name=data["name"],
+            created_by_id=str(callback.from_user.id),
+            required_fields=data["fields"]
+        )
+        if type_id:
+            await callback.message.edit_text(
+                "✅ Поздравляем!\n\n"
+                f"Новый тип услуги \"{data['name']}\" успешно создан с базовыми полями!\n"
+                "Теперь пользователи смогут создавать объявления этого типа.",
+                reply_markup=admin_keyboard()
+            )
+        else:
+            await callback.message.edit_text(
+                "❌ Ошибка при создании типа услуги\n\n"
+                "Возможно, тип услуги с таким названием уже существует.\n"
+                "Попробуйте создать тип услуги с другим названием.",
+                reply_markup=admin_keyboard()
+            )
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ Произошла ошибка:\n{str(e)}\n\n"
+            "Пожалуйста, попробуйте еще раз или обратитесь к разработчику.",
+            reply_markup=admin_keyboard()
+        )
+    finally:
+        await state.clear()
+
+@router.callback_query(F.data == "add_custom_fields")
+async def start_add_custom_fields(callback: CallbackQuery, state: FSMContext):
+    await add_new_field(callback.message, state)
 
 async def add_new_field(message: Message, state: FSMContext):
     await state.set_state(CreateServiceType.waiting_for_field_name)
@@ -281,10 +336,10 @@ async def process_select_options(message: Message, state: FSMContext):
         return
     await save_field(message, state, True, options)
 
-async def save_field(message: Message, state: FSMContext, required: bool, options: list[str] = None):
+async def save_field(message: Message, state: FSMContext, required: bool, options: Optional[List[str]] = None):
     data = await state.get_data()
     
-    field_data = {
+    field_data: Dict[str, Any] = {
         "type": data["current_field_type"],
         "label": data["current_field_label"],
         "description": data["current_field_description"],
@@ -364,14 +419,6 @@ async def process_more_fields(callback: CallbackQuery, state: FSMContext):
         await add_new_field(callback.message, state)
     elif callback.data == "finish":
         data = await state.get_data()
-        if not data.get("fields"):
-            await callback.message.edit_text(
-                "❌ Ошибка: Нужно добавить хотя бы одно поле!\n"
-                "Давайте создадим первое поле."
-            )
-            await add_new_field(callback.message, state)
-            return
-            
         try:
             type_id = db.add_service_type(
                 name=data["name"],

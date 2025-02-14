@@ -23,49 +23,49 @@ class FilterStates(StatesGroup):
 async def start_command(message: Message):
     telegram_id = str(message.from_user.id)
     
-    try:
-        member = await message.bot.get_chat_member(chat_id=-1002272626379, user_id=message.from_user.id)
-        if member.status == "left" or member.status == "kicked":
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    # try:
+    #     member = await message.bot.get_chat_member(chat_id=-1002272626379, user_id=message.from_user.id)
+    #     if member.status == "left" or member.status == "kicked":
+    #         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
             
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📢 Подписаться на группу", url="https://t.me/+fvSWdUdtzAczZDUy")]
-            ])
+    #         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    #             [InlineKeyboardButton(text="📢 Подписаться на группу", url="https://t.me/+fvSWdUdtzAczZDUy")]
+    #         ])
             
-            await message.answer(
-                "🔒 <b>Доступ ограничен</b>\n\n"
-                "Чтобы использовать все возможности бота, необходимо подписаться "
-                "на нашу официальную группу. Там вы найдете:\n\n"
-                "• Актуальные новости и обновления\n"
-                "• Полезные советы и рекомендации\n"
-                "• Эксклюзивные предложения\n\n"
-                "👇 Нажмите на кнопку ниже, чтобы подписаться",
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-            return
-        elif member.status in ["member", "administrator", "creator"]:
-            pass
-        else:
-            print(f"Неизвестный статус участника: {member.status}")
-            pass
+    #         await message.answer(
+    #             "🔒 <b>Доступ ограничен</b>\n\n"
+    #             "Чтобы использовать все возможности бота, необходимо подписаться "
+    #             "на нашу официальную группу. Там вы найдете:\n\n"
+    #             "• Актуальные новости и обновления\n"
+    #             "• Полезные советы и рекомендации\n"
+    #             "• Эксклюзивные предложения\n\n"
+    #             "👇 Нажмите на кнопку ниже, чтобы подписаться",
+    #             reply_markup=keyboard,
+    #             parse_mode="HTML"
+    #         )
+    #         return
+    #     elif member.status in ["member", "administrator", "creator"]:
+    #         pass
+    #     else:
+    #         print(f"Неизвестный статус участника: {member.status}")
+    #         pass
             
-    except Exception as e:
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    # except Exception as e:
+    #     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться на группу", url="https://t.me/+lMZWa6YQlkMyOWIy")]
-        ])
+    #     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    #         [InlineKeyboardButton(text="📢 Подписаться на группу", url="https://t.me/+lMZWa6YQlkMyOWIy")]
+    #     ])
         
-        await message.answer(
-            "🔒 <b>Доступ ограничен</b>\n\n"
-            "Для использования бота требуется подписка на нашу группу.\n"
-            "Пожалуйста, нажмите кнопку ниже 👇",
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
-        print(f"Ошибка при проверке участника группы: {e}")
-        return
+    #     await message.answer(
+    #         "🔒 <b>Доступ ограничен</b>\n\n"
+    #         "Для использования бота требуется подписка на нашу группу.\n"
+    #         "Пожалуйста, нажмите кнопку ниже 👇",
+    #         reply_markup=keyboard,
+    #         parse_mode="HTML"
+    #     )
+    #     print(f"Ошибка при проверке участника группы: {e}")
+    #     return
 
     user = db.get_user(telegram_id=telegram_id)
     

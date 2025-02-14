@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Optional, Union, Dict, Any
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -20,18 +21,17 @@ default_setting = DefaultBotProperties(parse_mode='HTML')
 bot = Bot(os.getenv("BOT_TOKEN"), default=default_setting)
 dp = Dispatcher()
 
-async def main():
+async def main() -> None:
     dp.message.middleware(PrivateChatMiddleware())
     dp.message.middleware(BanCheckMiddleware())
-    # dp.message.middleware(WorkSetMiddleware())  # Устанавливаем тех. работы в боте
-    dp.message.middleware(AntiFloodMiddleware(limit=0.5))  # Антифлуд можно включить по необходимости
+    # dp.message.middleware(WorkSetMiddleware())
+    dp.message.middleware(AntiFloodMiddleware(limit=0.5))
 
     dp.include_router(main_handler.router)
     dp.include_router(support_handler.router)
     dp.include_router(post_handler.router)
     dp.include_router(watch_handler.router)
     dp.include_router(profile_handler.router)
-
 
     dp.include_router(create_new_type.router)
     dp.include_router(get_complaints.router)
