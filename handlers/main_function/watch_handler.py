@@ -42,7 +42,7 @@ def build_service_types_keyboard(page: int = 1) -> Optional[InlineKeyboardMarkup
     for service_type in current_page_types:
         if service_type['is_active']:
             keyboard.row(InlineKeyboardButton(
-                text=f"{service_type['name']}",
+                text=f"{service_type['header']}",
                 callback_data=f"watch_type:{service_type['id']}"
             ))
 
@@ -1050,6 +1050,13 @@ async def handle_show_photos(callback: CallbackQuery, state: FSMContext):
 async def format_service_info(service: dict) -> str:
     """Форматирует информацию об услуге"""
     try:
+        # Получаем поля типа услуги
+        service_type_fields = db.get_service_type_fields(service['service_type_id'])
+        if not service_type_fields:
+            print(f"Поля типа услуги не найдены: {service['service_type_id']}")
+            return "Ошибка получения полей услуги"
+
+        # Форматируем адрес
         address_parts = []
         for field, prefix in {
             'city': 'г. ',
@@ -1062,37 +1069,62 @@ async def format_service_info(service: dict) -> str:
         
         address_str = ", ".join(filter(None, address_parts))
 
+        # Форматируем цену
         try:
             price = "{:,}".format(int(float(service.get('price', 0)))).replace(',', ' ')
         except (ValueError, TypeError):
             price = "0"
 
+        # Определяем статус
         status_emoji = "🟢" if service.get('status') == 'active' else "🔴"
         
+        # Форматируем дату создания
+        created_at = service.get('created_at', 'Не указано')
+        if isinstance(created_at, str):
+            try:
+                dt = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S')
+                created_at = dt.strftime('%d.%m.%Y %H:%M')
+            except ValueError:
+                pass
+
+        # Формируем основную информацию
         caption = (
             f"{status_emoji} {service.get('title', 'Без названия')}\n"
             f"━━━━━━━━━━━━━━━\n"
             f"📍 {address_str}\n"
-            #f"📱 {service.get('number_phone', 'Не указан')}\n"
             f"💰 {price}₽\n"
             f"👁 Просмотров: {service.get('views', 0)}\n"
-            f"📅 Создано: {service.get('created_at', 'Не указано')}\n"
+            f"📅 Создано: {created_at}\n"
             f"━━━━━━━━━━━━━━━\n"
         )
 
-        service_type = db.get_service_type(service['service_type_id'])
-        if not service_type:
-            print(f"Тип услуги не найден: {service['service_type_id']}")
-            return caption
-
+        # Добавляем кастомные поля в соответствии с их типом и порядком
         custom_fields = service.get('custom_fields', {})
-        required_fields = service_type.get('required_fields', {})
-        
-        if isinstance(custom_fields, dict) and isinstance(required_fields, dict):
-            for field, value in custom_fields.items():
-                if field in required_fields and value:
-                    field_label = required_fields[field].get('label', field)
-                    caption += f"📌 {field_label}: {value}\n"
+        if isinstance(custom_fields, dict):
+            # Сортируем поля по order_position
+            sorted_fields = sorted(service_type_fields, key=lambda x: x['order_position'])
+            
+            for field in sorted_fields:
+                field_name = field['name']
+                field_value = custom_fields.get(field_name)
+                
+                if field_value:
+                    # Форматируем значение в зависимости от типа поля
+                    if field['field_type'] == 'select' and field['item_for_select']:
+                        options = field['item_for_select'].split(',')
+                        try:
+                            field_value = options[int(field_value)]
+                        except (ValueError, IndexError):
+                            pass
+                    elif field['field_type'] == 'multiselect' and field['item_for_select']:
+                        options = field['item_for_select'].split(',')
+                        try:
+                            selected = [options[int(i)] for i in field_value.split(',')]
+                            field_value = ', '.join(selected)
+                        except (ValueError, IndexError):
+                            pass
+                            
+                    caption += f"📌 {field['name_for_user']}: {field_value}\n"
 
         return caption
 

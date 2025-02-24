@@ -57,7 +57,7 @@ def build_service_types_keyboard(page: int = 1) -> Optional[InlineKeyboardMarkup
         row_buttons = []
         for service_type in current_page_types[i:i+2]:
             row_buttons.append(InlineKeyboardButton(
-                text=service_type["name"],
+                text=service_type["header"],
                 callback_data=f"service_type:{service_type['id']}"
             ))
         keyboard.row(*row_buttons)
@@ -68,61 +68,48 @@ def build_service_types_keyboard(page: int = 1) -> Optional[InlineKeyboardMarkup
     return keyboard.as_markup()
 
 def create_webapp_form(service_type_id: int, need_enter_phone: Optional[bool] = True) -> Optional[ReplyKeyboardMarkup]:
-    """Создает форму веб-приложения для услуги"""
-    try:
+    """Создает форму веб-приложения для услуги с дополнительными полями"""
+    try:    
         service_type = db.get_service_type(service_type_id)
-        if not service_type:
+        if not service_type:    
             return None
-
-        # Формируем базовые поля
-        fields = {
-            'price': 'Введите цену'
-        }
         
-        # Добавляем телефон если нужно
-        if need_enter_phone:
-            fields['number_phone'] = 'Введите номер телефона'
-            
-        # Добавляем дополнительные поля из service_type
-        if service_type.get("required_fields"):
-            for field_name, field_data in service_type["required_fields"].items():
-                if field_name not in ['city', 'price', 'number_phone', 'photo']:
-                    fields[field_name] = field_data.get('label', field_name)
+        additional_fields = db.get_service_type_fields(service_type_id)
 
-        # Формируем URL параметры
-        params = []
-        for name, placeholder in fields.items():
-            required = name in ['price', 'number_phone'] 
-            params.append(f"{quote(name)}={quote(placeholder)}|{str(required)}")
-
+        # Формируем базовый URL
         base_url = "https://spontaneous-kashata-919d92.netlify.app/create"
+        params = [
+            f"price=Введите+цену",
+            f"header={service_type['header'].replace(' ', '+')}"
+        ]
+
+        # Добавляем дополнительные поля в URL
+        for field in additional_fields:
+            if field['field_type'] in ['select', 'multiselect']:
+                # Форматируем строку для select/multiselect полей
+                field_value = f"{field['name_for_user']}+|+{'+'.join(field['item_for_select'].split(','))}"
+                params.append(f"{field['name']}={field_value.replace(' ', '+')}")
+            else:
+                # Для других типов полей просто добавляем имя поля
+                params.append(f"{field['name']}={field['name_for_user'].replace(' ', '+')}")
+
+        # Собираем полный URL
         full_url = f"{base_url}?{'&'.join(params)}"
+        print(full_url)
 
         keyboard = ReplyKeyboardBuilder()
-        keyboard.row(
-            KeyboardButton(
-                text="📝 Заполнить форму",
-                web_app=WebAppInfo(url=full_url)
-            )
-        )
+        keyboard.row(KeyboardButton(text="📝 Заполнить форму", web_app=WebAppInfo(url=full_url)))
         keyboard.row(KeyboardButton(text="Вернуться домой 🏠"))
 
-        return keyboard.as_markup(
-            resize_keyboard=True,
-            one_time_keyboard=False,
-            is_persistent=True,
-            input_field_placeholder="Нажмите кнопку для заполнения формы"
-        )
-
-    except Exception as e:
-        print(f"Ошибка создания формы: {str(e)}")
+        return keyboard.as_markup(resize_keyboard=True, one_time_keyboard=False, is_persistent=True,
+                                  input_field_placeholder="Нажмите кнопку для заполнения формы")
+    except Exception:
         return None
 
 @router.message(F.text.in_(["📈 Выставить свою услугу", "/add_service"]))
 async def start_post_service(message: Message, state: FSMContext):
     """Начало публикации услуги"""
 
-    
     user = db.get_user(telegram_id=str(message.from_user.id))
     if not user or not user[4]:
         await message.answer(
@@ -198,13 +185,9 @@ async def handle_pagination(callback: CallbackQuery):
 @router.message(ServiceStates.filling_form, lambda message: message.web_app_data and message.web_app_data.button_text == "📝 Заполнить форму")
 async def process_create_webapp_data(message: Message, state: FSMContext):
     """Обработка данных формы для создания услуги"""
+    print(message.web_app_data.data)
     try:
         form_data = json.loads(message.web_app_data.data)
-        
-        # Проверяем обязательные поля
-        required_fields = ["price", "city", "street", "district"]
-        if not all(form_data.get(field) for field in required_fields):
-            raise ValueError("Не заполнены обязательные поля")
 
         # Получаем пользователя и его телефон
         user = db.get_user(telegram_id=str(message.from_user.id))
@@ -321,32 +304,48 @@ async def process_service_data(message: Message, state: FSMContext):
         if not user:
             raise ValueError("Пользователь не найден")
 
+        # Проверяем, не заблокирован ли пользователь
+        ban_info = db.get_ban_info('user', accused_telegram_id=str(message.from_user.id))
+        if ban_info:
+            raise ValueError("Вы заблокированы и не можете создавать услуги")
+
+        # Проверяем обязательные поля формы
+        required_fields = ['city', 'district', 'street', 'price']
+        missing_fields = [f for f in required_fields if not form_data.get(f)]
+        if missing_fields:
+            raise ValueError(f"Не заполнены обязательные поля: {', '.join(missing_fields)}")
+
+
+        price = form_data.get('price', 0)
+
         # Формируем данные услуги
         service_data = {
             "user_id": user[1],
             "service_type_id": service_type_id,
-            "title": service_type["name"],
+            "title": service_type["header"],
             "photo_id": ','.join(photo_ids),
-            "city": form_data.get('city', ''),
-            "district": form_data.get('district', ''),
-            "street": form_data.get('street', ''),
-            "house": form_data.get('house', 'Не указано'),
-            "number_phone": form_data.get('number_phone', user[3] or ''),
-            "price": float(form_data.get('price', 0)),
+            "city": form_data['city'].strip(),
+            "district": form_data['district'].strip(),
+            "street": form_data['street'].strip(),
+            "house": form_data.get('house', 'Не указано').strip(),
+            "number_phone": form_data.get('number_phone', user[3] or '').strip(),
+            "price": price,
             "custom_fields": {
-                k: v for k, v in form_data.items() 
+                k: v.strip() if isinstance(v, str) else v
+                for k, v in form_data.items()
                 if k not in ['city', 'district', 'street', 'house', 'number_phone', 'price']
+                and v is not None
             }
         }
-    
+
         service_id = db.add_service(**service_data)
         if not service_id:
-           raise Exception("Ошибка при создании услуги")
+            raise Exception("Ошибка при создании услуги")
 
         await state.clear()
         await message.answer(
             "✅ Поздравляем! Ваша услуга успешно создана!\n"
-            "Теперь она доступна для поиска и просмотра другим пользователям", 
+            "Теперь она доступна для поиска и просмотра другим пользователям",
             reply_markup=seller_keyboard()
         )
 
@@ -356,7 +355,7 @@ async def process_service_data(message: Message, state: FSMContext):
             reply_markup=to_home_keyboard()
         )
         await state.clear()
-        
+
     except Exception as e:
         print(f"Критическая ошибка: {e}")
         await message.answer(

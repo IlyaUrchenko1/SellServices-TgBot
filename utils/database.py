@@ -30,30 +30,26 @@ class Database:
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS service_types (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
+                header TEXT UNIQUE NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                created_by_id TEXT,
+                created_by_telegram_id TEXT,
                 is_active BOOLEAN DEFAULT 1,
-                price_level INTEGER DEFAULT 0,
-                required_fields TEXT,
-                CONSTRAINT valid_required_fields CHECK (
-                    required_fields IS NULL OR json_valid(required_fields)
-                )
+                price_level INTEGER DEFAULT 0 CHECK (price_level IN (0, 1))
             )
         """)
-        
+
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS service_type_fields (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 service_type_id INTEGER NOT NULL,
-                field_name TEXT NOT NULL,
-                display_name TEXT NOT NULL,
-                field_type TEXT NOT NULL CHECK (field_type IN ('text', 'number', 'select', 'multiselect')),
-                options TEXT,
+                name TEXT NOT NULL,
+                name_for_user TEXT NOT NULL,
+                field_type TEXT NOT NULL CHECK (field_type IN ('text', 'number', 'select', 'multiselect', 'date')),
+                item_for_select TEXT DEFAULT '',
                 is_required BOOLEAN DEFAULT 1,
+                order_position INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (service_type_id) REFERENCES service_types(id),
-                UNIQUE(service_type_id, field_name)
+                FOREIGN KEY (service_type_id) REFERENCES service_types(id)
             )
         """)
 
@@ -261,40 +257,96 @@ class Database:
 
     #region Методы для таблицы service_types
 
-    def add_service_type(self, name: str, created_by_id: str, required_fields: Dict[str, Dict[str, Any]]) -> Optional[int]:
+    def get_service_types_by_creation_date(self) -> List[Dict[str, Any]]:
+        """Получает все типы услуг, отсортированные по дате создания (от старых к новым)
+        
+        Returns:
+            Список словарей с информацией о типах услуг
         """
-        Добавляет новый тип услуги
+        try:
+            self.cursor.execute("""
+                SELECT id, header, created_at, created_by_telegram_id, is_active, price_level
+                FROM service_types 
+                ORDER BY created_at ASC
+            """)
+            
+            rows = self.cursor.fetchall()
+            return [{
+                "id": row[0],
+                "header": row[1],
+                "created_at": row[2],
+                "created_by_telegram_id": row[3],
+                "is_active": bool(row[4]),
+                "price_level": row[5]
+            } for row in rows]
+            
+        except Exception as e:
+            print(f"Ошибка при получении типов услуг: {e}")
+            return []
+
+    def get_service_type_by_name(self, name: str) -> Optional[Dict]:
+        """Получает тип услуги по названию
         Args:
             name: Название типа услуги
-            created_by_id: Telegram ID админа, создавшего тип
-            required_fields: Словарь с описанием обязательных полей
+        Returns:
+            Словарь с информацией о типе услуги или None
+        """
+        try:
+            self.cursor.execute("""
+                SELECT id, header, created_at, created_by_telegram_id, is_active, price_level
+                FROM service_types 
+                WHERE header = ?
+            """, (name,))
+            
+            row = self.cursor.fetchone()
+            if not row:
+                return None
+                
+            return {
+                "id": row[0],
+                "header": row[1],
+                "created_at": row[2],
+                "created_by_telegram_id": row[3],
+                "is_active": bool(row[4]),
+                "price_level": row[5]
+            }
+        except Exception as e:
+            print(f"Ошибка при получении типа услуги по названию: {e}")
+            return None
+
+    def add_service_type(self, header: str, created_by_telegram_id: str, price_level: int = 0) -> Optional[int]:
+        """Добавляет новый тип услуги
+        Args:
+            header: Название типа услуги
+            created_by_telegram_id: Telegram ID создателя
+            price_level: Уровень цены (0 - обычный, 1 - премиум)
         Returns:
             ID созданного типа услуги или None в случае ошибки
         """
         try:
             self.cursor.execute("""
-                INSERT INTO service_types (name, created_by_id)
-                VALUES (?, ?)
-            """, (name, created_by_id))
+                INSERT INTO service_types (header, created_by_telegram_id, price_level, is_active)
+                VALUES (?, ?, ?, 1)
+            """, (header, created_by_telegram_id, price_level))
             self.connection.commit()
             return self.cursor.lastrowid
-
         except sqlite3.IntegrityError:
-            print(f"Тип услуги '{name}' уже существует")
+            print(f"Тип услуги '{header}' уже существует")
             return None
         except Exception as e:
             print(f"Ошибка при создании типа услуги: {e}")
             return None
 
     def get_service_type(self, type_id: int) -> Optional[Dict]:
-        """
-        Получает информацию о типе услуги по ID
+        """Получает информацию о типе услуги по ID
+        Args:
+            type_id: ID типа услуги
         Returns:
-            Словарь с информацией о типе услуги
+            Словарь с информацией о типе услуги или None
         """
         try:
             self.cursor.execute("""
-                SELECT id, name, created_by_id, created_at, is_active, price_level
+                SELECT id, header, created_at, created_by_telegram_id, is_active, price_level
                 FROM service_types 
                 WHERE id = ?
             """, (type_id,))
@@ -305,9 +357,9 @@ class Database:
                 
             return {
                 "id": row[0],
-                "name": row[1],
-                "created_by_id": row[2],
-                "created_at": row[3],
+                "header": row[1],
+                "created_at": row[2],
+                "created_by_telegram_id": row[3],
                 "is_active": bool(row[4]),
                 "price_level": row[5]
             }
@@ -316,98 +368,124 @@ class Database:
             return None
 
     def get_active_service_types(self) -> List[Dict]:
-        """
-        Получает список всех активных типов услуг
+        """Получает список всех активных типов услуг
         Returns:
             Список словарей с информацией о типах услуг
         """
         try:
             self.cursor.execute("""
-                SELECT id, name, created_at, price_level
+                SELECT id, header, created_at, price_level
                 FROM service_types
                 WHERE is_active = 1
-                ORDER BY name
+                ORDER BY header
             """)
             
-            types = []
-            for row in self.cursor.fetchall():
-                types.append({
-                    "id": row[0],
-                    "name": row[1],
-                    "created_at": row[2],
-                    "price_level": row[3]
-                })
-            return types
+            return [{
+                "id": row[0],
+                "header": row[1],
+                "created_at": row[2],
+                "price_level": row[3]
+            } for row in self.cursor.fetchall()]
             
         except Exception as e:
             print(f"Ошибка при получении типов услуг: {e}")
             return []
 
-    def deactivate_service_type(self, type_id: int) -> bool:
-        """
-        Деактивирует тип услуги (мягкое удаление)
-        Returns:
-            bool: Успешность операции
-        """
-        try:
-            self.cursor.execute("""
-                UPDATE service_types 
-                SET is_active = 0
-                WHERE id = ?
-            """, (type_id,))
-            self.connection.commit()
-            return True
-        except Exception as e:
-            print(f"Ошибка при деактивации типа услуги: {e}")
-            return False
-
-    def increment_service_views(self, service_id: int) -> bool:
-        """
-        Увеличивает счетчик просмотров услуги
+    def update_service_type(self, type_id: int, header: Optional[str] = None, 
+                          is_active: Optional[bool] = None, price_level: Optional[int] = None) -> bool:
+        """Обновляет информацию о типе услуги
         Args:
-            service_id: ID услуги
+            type_id: ID типа услуги
+            header: Новое название
+            is_active: Новый статус активности
+            price_level: Новый уровень цены (0 - обычный, 1 - премиум)
         Returns:
-            bool: Успешность операции
+            Успешность операции
         """
         try:
-            self.cursor.execute("""
-                UPDATE services
-                SET views = views + 1
-                WHERE id = ?
-            """, (service_id,))
+            update_fields = []
+            params = []
+            
+            if header is not None:
+                update_fields.append("header = ?")
+                params.append(header)
+            if is_active is not None:
+                update_fields.append("is_active = ?")
+                params.append(int(is_active))
+            if price_level is not None:
+                update_fields.append("price_level = ?")
+                params.append(price_level)
+                
+            if not update_fields:
+                return False
+                
+            params.append(type_id)
+            query = f"UPDATE service_types SET {', '.join(update_fields)} WHERE id = ?"
+            
+            self.cursor.execute(query, params)
             self.connection.commit()
             return True
         except Exception as e:
-            print(f"Ошибка при обновлении просмотров: {e}")
+            print(f"Ошибка при обновлении типа услуги: {e}")
             return False
 
-    def get_service_types_by_creation_date(self) -> List[Dict]:
-        """
-        Получает все типы услуг, отсортированные по времени создания (чем старее, тем выше)
+    def add_service_type_field(self, service_type_id: int, name: str, name_for_user: str,
+                             field_type: str, order_position: int, item_for_select: str = "",
+                             is_required: bool = True) -> Optional[int]:
+        """Добавляет новое поле для типа услуги
+        Args:
+            service_type_id: ID типа услуги
+            name: Техническое имя поля
+            name_for_user: Отображаемое имя поля
+            field_type: Тип поля (text/number/select/multiselect/date)
+            order_position: Позиция в порядке отображения
+            item_for_select: Элементы для выбора (для типов select/multiselect)
+            is_required: Обязательность поля
         Returns:
-            Список словарей с информацией о типах услуг
+            ID созданного поля или None в случае ошибки
         """
         try:
             self.cursor.execute("""
-                SELECT id, name, created_at, created_by_id, is_active, price_level
-                FROM service_types
-                ORDER BY created_at ASC
-            """)
-            
-            types = []
-            for row in self.cursor.fetchall():
-                types.append({
-                    "id": row[0],
-                    "name": row[1],
-                    "created_at": row[2],
-                    "created_by_id": row[3],
-                    "is_active": bool(row[4]),
-                    "price_level": row[5]
-                })
-            return types
-            
+                INSERT INTO service_type_fields (
+                    service_type_id, name, name_for_user, field_type,
+                    item_for_select, is_required, order_position
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (service_type_id, name, name_for_user, field_type,
+                 item_for_select, int(is_required), order_position))
+            self.connection.commit()
+            return self.cursor.lastrowid
         except Exception as e:
-            print(f"Ошибка при получении типов услуг: {e}")
+            print(f"Ошибка при добавлении поля типа услуги: {e}")
+            return None
+
+    def get_service_type_fields(self, service_type_id: int) -> List[Dict]:
+        """Получает все поля для типа услуги
+        Args:
+            service_type_id: ID типа услуги
+        Returns:
+            Список словарей с информацией о полях
+        """
+        try:
+            self.cursor.execute("""
+                SELECT id, name, name_for_user, field_type, item_for_select,
+                       is_required, order_position
+                FROM service_type_fields
+                WHERE service_type_id = ?
+                ORDER BY order_position
+            """, (service_type_id,))
+            
+            return [{
+                "id": row[0],
+                "name": row[1],
+                "name_for_user": row[2],
+                "field_type": row[3],
+                "item_for_select": row[4],
+                "is_required": bool(row[5]),
+                "order_position": row[6],
+            } for row in self.cursor.fetchall()]
+        except Exception as e:
+            print(f"Ошибка при получении полей типа услуги: {e}")
             return []
 
     #endregion
@@ -479,8 +557,7 @@ class Database:
             query = """
                 SELECT 
                     s.*,
-                    st.name as service_type_name,
-                    st.required_fields as service_type_fields,
+                    st.header as service_type_name,
                     u.username as seller_username,
                     u.number_phone as seller_phone,
                     u.work_time_start as seller_work_time_start,
@@ -533,7 +610,7 @@ class Database:
             for row in rows:
                 item = dict(zip(columns, row))
                 
-                for json_field in ['custom_fields', 'service_type_fields']:
+                for json_field in ['custom_fields']:
                     if item.get(json_field):
                         try:
                             item[json_field] = json.loads(item[json_field])
@@ -651,8 +728,7 @@ class Database:
             query = """
                 SELECT 
                     s.*,
-                    st.name as service_type_name,
-                    st.required_fields as service_type_fields,
+                    st.header as service_type_name,
                     u.username as seller_username,
                     u.number_phone as seller_phone
                 FROM services s
@@ -726,7 +802,7 @@ class Database:
                 item = dict(zip(columns, row))
                 
                 # Обрабатываем JSON поля
-                for json_field in ['custom_fields', 'service_type_fields']:
+                for json_field in ['custom_fields']:
                     try:
                         if item.get(json_field):
                             item[json_field] = json.loads(item[json_field])
@@ -813,6 +889,14 @@ class Database:
         """
         self.cursor.execute("UPDATE services SET status = ? WHERE id = ?", (status, service_id))
         self.connection.commit()
+    
+    def increment_service_views(self, service_id: int) -> None:
+        """
+        Увеличивает количество просмотров услуги на 1
+        """
+        self.cursor.execute("UPDATE services SET views = views + 1 WHERE id = ?", (service_id,))
+        self.connection.commit()
+        
     #endregion
 
     #region Методы для таблицы complaints
@@ -904,7 +988,7 @@ class Database:
             if complaint['created_at']:
                 complaint['created_at'] = datetime.strptime(
                     complaint['created_at'], '%Y-%m-%d %H:%M:%S'
-                ).strftime('%d.%m.%Y %H:%M')
+                ).strftime('%d.%m.%Y %H:%М')
                 
             return complaint
             
@@ -977,7 +1061,7 @@ class Database:
                 if complaint['created_at']:
                     complaint['created_at'] = datetime.strptime(
                         complaint['created_at'], '%Y-%m-%d %H:%M:%S'
-                    ).strftime('%d.%m.%Y %H:%M')
+                    ).strftime('%d.%m.%Y %H:%М')
                     
                 complaints.append(complaint)
                 
